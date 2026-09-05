@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">课程表</string>
+    <string name="week_title">第 %1$d 周</string>
+    <string name="today">今日</string>
+    <string name="tomorrow">明日</string>
+    <string name="no_course_today">今日无课</string>
+    <string name="no_course_tomorrow">明日无课</string>
+    <string name="not_this_week">非本周</string>
+    <string name="overview">总览</string>
+    <string name="settings">设置</string>
+    <string name="add_course">添加课程</string>
+    <string name="edit_phase">编辑阶段</string>
+    <string name="delete_phase">删除此阶段</string>
+    <string name="delete_course">删除整门课</string>
+</resources>
