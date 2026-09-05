@@ -13,8 +13,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import java.time.LocalDate
+import kotlinx.coroutines.launch
 
 data class WeekUiState(
     val semester: SemesterEntity? = null,
@@ -34,11 +35,7 @@ class WeekViewModel(private val repo: TimetableRepository) : ViewModel() {
 
     private val semesterFlow = semesterIdFlow.flatMapLatest { id ->
         if (id == null) flowOf(null) else {
-            // need to get semester by id; we use flowSemesters and map, but simpler: repo has flowCurrent? We'll query sync via flow?
-            // Use flowSemesters and find
-            repo.flowSemesters().let { flow ->
-                kotlinx.coroutines.flow.map(flow) { list -> list.find { it.id == id } }
-            }
+            repo.flowSemesters().map { list -> list.find { it.id == id } }
         }
     }
 
@@ -55,25 +52,9 @@ class WeekViewModel(private val repo: TimetableRepository) : ViewModel() {
         }.let { list ->
             if (hide) list.filter { it.isActive } else list
         }
-        WeekUiState(semester, week, hide, phases, visible, names)
+        WeekUiState(semester as SemesterEntity?, week as Int, hide as Boolean, phases as List<CoursePhaseEntity>, visible, names as List<String>)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), WeekUiState())
 
     fun setWeek(w: Int) { currentWeek.value = w }
-    fun setHide(h: Boolean) { viewModelScope.let { kotlinx.coroutines.launch { repo.setHideNotThisWeek(h) } } }
-
-    // helper for widget refresh
-    suspend fun getCurrentSemesterSync(): SemesterEntity? {
-        val id = repo.currentSemesterIdFlow.let { flow ->
-            var v: Long? = null
-            // collect first value synchronously via repo method? fallback
-            // Use db directly: we need semester
-            // We'll try to get from uiState.value
-            uiState.value.semester?.id
-        }
-        return uiState.value.semester
-    }
-}
-
-private fun <T,R> kotlinx.coroutines.flow.Flow<T>.map(transform: suspend (T) -> R): kotlinx.coroutines.flow.Flow<R> {
-    return kotlinx.coroutines.flow.map { transform(it) }
+    fun setHide(h: Boolean) { viewModelScope.launch { repo.setHideNotThisWeek(h) } }
 }

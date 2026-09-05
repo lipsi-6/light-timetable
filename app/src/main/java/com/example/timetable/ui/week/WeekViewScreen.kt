@@ -1,7 +1,6 @@
 package com.example.timetable.ui.week
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -35,6 +34,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -47,6 +47,7 @@ import com.example.timetable.util.WeekCalculator
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,6 +74,7 @@ fun WeekViewScreen(
     }
     var selectedPhase by remember { mutableStateOf<CoursePhaseEntity?>(null) }
     var overlapTopId by remember { mutableStateOf<Long?>(null) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -90,16 +92,13 @@ fun WeekViewScreen(
     ) { padding ->
         val startMonday = LocalDate.ofInstant(Instant.ofEpochMilli(semester.startMondayMillis), ZoneId.systemDefault())
         val week = state.weekIndex
-        // 7 columns
         val scroll = rememberScrollState()
         val vScroll = rememberScrollState()
         val hourHeight = 64.dp
         val dayNames = listOf("周一","周二","周三","周四","周五","周六","周日")
-        // compute dates for header
         val dates = (1..7).map { WeekCalculator.dateForWeekAndDay(startMonday, week, it) }
 
         Column(Modifier.padding(padding).fillMaxSize()) {
-            // header row with dates
             Row(Modifier.fillMaxWidth().horizontalScroll(scroll).padding(start = 48.dp)) {
                 dayNames.forEachIndexed { idx, name ->
                     val d = dates[idx]
@@ -109,7 +108,6 @@ fun WeekViewScreen(
                     }
                 }
             }
-            // week pager hint
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
                 androidx.compose.material3.TextButton(onClick = { vm.setWeek((week-1).coerceAtLeast(1)) }) { Text("上一周") }
                 Spacer(Modifier.weight(1f))
@@ -117,11 +115,9 @@ fun WeekViewScreen(
                 Spacer(Modifier.weight(1f))
                 androidx.compose.material3.TextButton(onClick = { vm.setWeek((week+1).coerceAtMost(semester.totalWeeks)) }) { Text("下一周") }
             }
-            // grid
             val totalHours = (semester.displayEndMin - semester.displayStartMin) / 60
             val gridHeight = hourHeight * totalHours
             Row(Modifier.fillMaxSize()) {
-                // time axis
                 Column(Modifier.width(48.dp).verticalScroll(vScroll).height(gridHeight)) {
                     for (h in 0 until totalHours) {
                         val min = semester.displayStartMin + h*60
@@ -130,37 +126,29 @@ fun WeekViewScreen(
                         }
                     }
                 }
-                // days grid horizontally scrollable, vertically scrollable
                 Box(Modifier.horizontalScroll(scroll).verticalScroll(vScroll).width(90.dp*7).height(gridHeight)
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha=0.2f))
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onLongPress = { offset ->
-                                // estimate day and time from offset
                                 val day = (offset.x / (90.dp.toPx())).toInt().coerceIn(0,6) + 1
                                 val minutesFromTop = (offset.y / hourHeight.toPx() * 60).toInt()
                                 val startMin = (semester.displayStartMin + minutesFromTop).coerceIn(semester.displayStartMin, semester.displayEndMin-30)
-                                // snap to 30min
                                 val snapped = (startMin / 30)*30
                                 onAdd(day, snapped)
                             }
                         )
                     }
                 ) {
-                    // hour lines
                     for (h in 0..totalHours) {
                         Box(Modifier.fillMaxWidth().height(1.dp).offset(y = hourHeight * h).background(MaterialTheme.colorScheme.outline.copy(alpha=0.15f)))
                     }
-                    // vertical day lines
                     for (d in 0..7) {
                         Box(Modifier.width(1.dp).height(gridHeight).offset(x = 90.dp * d).background(MaterialTheme.colorScheme.outline.copy(alpha=0.15f)))
                     }
-                    // group phases by day
                     val byDay = state.visiblePhases.groupBy { it.phase.dayOfWeek }
-                    // handle overlap stacking: for each day, sort by startMin
                     for (day in 1..7) {
                         val list = byDay[day] ?: emptyList()
-                        // for overlap detection, we will render in order; clicking toggles top
                         val sorted = list.sortedWith(compareBy({ it.phase.startMin }, { it.phase.id }))
                         sorted.forEachIndexed { idx, pw ->
                             val p = pw.phase
@@ -168,14 +156,12 @@ fun WeekViewScreen(
                             val topDp = ((p.startMin - semester.displayStartMin) / 60f * 64f).dp
                             val hDp = ((p.endMin - p.startMin) / 60f * 64f).dp
                             if (hDp <= 0.dp) return@forEachIndexed
-                            // overlap offset: count overlaps before
                             val overlapCount = sorted.count { other ->
                                 other.phase.startMin < p.endMin && other.phase.endMin > p.startMin
                             }
                             val isOverlapped = overlapCount > 1
-                            val offsetX = if (isOverlapped) ( (idx % 2) * 8).dp else 0.dp
-                            val offsetY = if (isOverlapped) ( (idx % 2) * 4).dp else 0.dp
-                            val z = if (overlapTopId == p.id) 10f else idx.toFloat()
+                            val offsetX = if (isOverlapped) ((idx % 2) * 8).dp else 0.dp
+                            val offsetY = if (isOverlapped) ((idx % 2) * 4).dp else 0.dp
                             val bg = if (isActive) colorForIndex(p.colorIndex) else fadedColor(colorForIndex(p.colorIndex))
                             val x = 90.dp * (day-1) + offsetX + 2.dp
                             Card(
@@ -183,15 +169,7 @@ fun WeekViewScreen(
                                     .width(88.dp - offsetX)
                                     .height(hDp)
                                     .offset(x = x, y = topDp + offsetY)
-                                    .clickable {
-                                        if (isOverlapped) {
-                                            // toggle stacking
-                                            overlapTopId = if (overlapTopId == p.id) null else p.id
-                                        } else {
-                                            selectedPhase = p
-                                        }
-                                    }
-                                    .pointerInput(Unit) {
+                                    .pointerInput(p.id, overlapTopId) {
                                         detectTapGestures(
                                             onLongPress = { onEdit(p.id) },
                                             onTap = {
@@ -231,23 +209,14 @@ fun WeekViewScreen(
                     Row(Modifier.padding(top=12.dp)) {
                         androidx.compose.material3.Button(onClick = { selectedPhase=null; onEdit(p.id) }) { Text("编辑此阶段") }
                         Spacer(Modifier.width(8.dp))
-                        androidx.compose.material3.OutlinedButton(onClick = { kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).let { scope ->
-                            scope.launch(kotlinx.coroutines.Dispatchers.IO) { repoDeletePhase(p); kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){ selectedPhase=null } }
-                        } }) { Text("删除此阶段") }
+                        androidx.compose.material3.OutlinedButton(onClick = { scope.launch { repoDeletePhase(p); selectedPhase=null } }) { Text("删除此阶段") }
                     }
                     androidx.compose.material3.OutlinedButton(onClick = {
-                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch(kotlinx.coroutines.Dispatchers.IO) {
-                            repoDeleteCourse(p.courseName)
-                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){ selectedPhase=null }
-                        }
+                        scope.launch { repoDeleteCourse(p.courseName); selectedPhase=null }
                     }, modifier = Modifier.padding(top=8.dp)) { Text("删除整门课 (${p.courseName})") }
                     Spacer(Modifier.height(24.dp))
                 }
             }
         }
     }
-}
-
-private fun kotlinx.coroutines.CoroutineScope.launch(context: kotlin.coroutines.CoroutineContext, block: suspend () -> Unit) : kotlinx.coroutines.Job {
-    return kotlinx.coroutines.launch(context) { block() }
 }

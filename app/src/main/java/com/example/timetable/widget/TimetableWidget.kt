@@ -2,10 +2,10 @@ package com.example.timetable.widget
 
 import android.content.Context
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.unit.dp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.layout.Box
@@ -21,102 +21,86 @@ import androidx.glance.layout.width
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
-import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import com.example.timetable.TimetableApp
-import com.example.timetable.data.db.CoursePhaseEntity
 import com.example.timetable.util.RepeatExpander
 import com.example.timetable.util.WeekCalculator
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import kotlinx.coroutines.flow.first
 
 class TimetableWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val app = context.applicationContext as TimetableApp
         val repo = app.repo
-        // get current semester - need to collect first value synchronously; use db directly for widget (avoid Flow)
-        val semesters = mutableListOf<com.example.timetable.data.db.SemesterEntity>()
-        // fallback: try to get current via DataStore? Simplified: query db for isCurrent or first
-        val all = try { app.db.semesterDao().getById(repo.prefs.currentSemesterIdFlow.let { null } ?: 0) } catch(_:Exception){null}
-        // Actually load via repo.getAll? We'll try to fetch synchronously via db
-        val semester = try {
-            val list = app.db.semesterDao().let { dao ->
-                // can't flow in widget easily, use direct query via Room allowMainThread? We'll query via db directly with suspend
-                // Use repo.getSemesterSync if id known else find isCurrent
-                val currentId = runCatching { kotlinx.coroutines.runBlocking { 
-                    var v: Long? = null
-                    kotlinx.coroutines.flow.firstOrNull(repo.currentSemesterIdFlow)?.let { v = it }
-                    v
-                } }.getOrNull()
-                if (currentId != null) dao.getById(currentId) else null
+        var semester: com.example.timetable.data.db.SemesterEntity? = null
+        var phases: List<com.example.timetable.data.db.CoursePhaseEntity> = emptyList()
+        try {
+            val currentId = repo.currentSemesterIdFlow.first()
+            semester = if (currentId != null) app.db.semesterDao().getById(currentId) else null
+            if (semester == null) {
+                val list = repo.flowSemesters().first()
+                semester = list.firstOrNull()
             }
-            list ?: app.db.let { 
-                // fallback: any semester
-                kotlinx.coroutines.runBlocking { 
-                    val phases = app.db.semesterDao()
-                    // brute: try to get first via flow
-                    kotlinx.coroutines.flow.firstOrNull(repo.flowSemesters())?.firstOrNull()
-                }
+            if (semester != null) {
+                phases = app.db.phaseDao().getAllBySemesterSync(semester.id)
             }
-        } catch (_:Exception) { null }
-
+        } catch (_: Exception) {}
+        val s = semester
+        val p = phases
         provideContent {
-            WidgetContent(context, semester)
+            WidgetContent(s, p)
         }
     }
 
     @Composable
-    private fun WidgetContent(context: Context, semester: com.example.timetable.data.db.SemesterEntity?) {
+    private fun WidgetContent(semester: com.example.timetable.data.db.SemesterEntity?, phases: List<com.example.timetable.data.db.CoursePhaseEntity>) {
         if (semester == null) {
-            Column(modifier = GlanceModifier.fillMaxSize().background(ColorProvider(day = androidx.compose.ui.graphics.Color(0xFFF5F5F5), night = androidx.compose.ui.graphics.Color(0xFF121212))).padding(12.dp)) {
-                Text("课程表", style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Black, night = androidx.compose.ui.graphics.Color.White)))
-                Text("请先创建学期", style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Gray, night = androidx.compose.ui.graphics.Color.LightGray)))
+            Column(modifier = GlanceModifier.fillMaxSize().background(ColorProvider(androidx.compose.ui.graphics.Color(0xFFF5F5F5))).padding(12.dp)) {
+                Text("课程表", style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Black)))
+                Text("请先创建学期", style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Gray)))
             }
             return
         }
-        val app = context.applicationContext as TimetableApp
-        val phases = kotlinx.coroutines.runBlocking { app.db.phaseDao().getAllBySemesterSync(semester.id) }
         val startMonday = LocalDate.ofInstant(java.time.Instant.ofEpochMilli(semester.startMondayMillis), ZoneId.systemDefault())
         val today = LocalDate.now()
         val tomorrow = today.plusDays(1)
         val weekToday = WeekCalculator.weekIndexForDate(startMonday, today).coerceIn(1, semester.totalWeeks)
         val weekTomorrow = WeekCalculator.weekIndexForDate(startMonday, tomorrow).coerceIn(1, semester.totalWeeks)
-        val nowMin = LocalTime.now().hour*60 + LocalTime.now().minute
+        val nowMin = LocalTime.now().hour * 60 + LocalTime.now().minute
 
-        fun phasesFor(date: LocalDate, week: Int): List<CoursePhaseEntity> {
-            val dow = date.dayOfWeek.value // 1 Mon
-            return phases.filter { it.dayOfWeek == dow && RepeatExpander.isActiveInWeek(it, week, semester.totalWeeks) }
-                .sortedBy { it.startMin }
+        fun phasesFor(date: LocalDate, week: Int): List<com.example.timetable.data.db.CoursePhaseEntity> {
+            val dow = date.dayOfWeek.value
+            return phases.filter { it.dayOfWeek == dow && RepeatExpander.isActiveInWeek(it, week, semester.totalWeeks) }.sortedBy { it.startMin }
         }
         val todayPhases = phasesFor(today, weekToday).filter { it.endMin > nowMin }
         val tomorrowPhases = phasesFor(tomorrow, weekTomorrow)
 
-        Column(modifier = GlanceModifier.fillMaxSize().background(ColorProvider(day = androidx.compose.ui.graphics.Color.White, night = androidx.compose.ui.graphics.Color(0xFF1E1E1E))).padding(8.dp)) {
-            Text("${semester.name} · 第${weekToday}周", style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Gray, night = androidx.compose.ui.graphics.Color.LightGray)))
+        Column(modifier = GlanceModifier.fillMaxSize().background(ColorProvider(androidx.compose.ui.graphics.Color.White)).padding(8.dp)) {
+            Text("${semester.name} · 第${weekToday}周", style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Gray)))
             Spacer(GlanceModifier.height(6.dp))
-            // Today section
-            Text("今日", style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Black, night = androidx.compose.ui.graphics.Color.White)))
+            Text("今日", style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Black)))
             if (todayPhases.isEmpty()) {
-                Text("今日无课", style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Gray, night = androidx.compose.ui.graphics.Color.LightGray)))
+                Text("今日无课", style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Gray)))
             } else {
-                todayPhases.take(6).forEach { p ->
+                todayPhases.take(6).forEach { ph ->
                     Row(modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                        Box(modifier = GlanceModifier.size(8.dp).background(colorProviderFor(p.colorIndex))) {}
+                        Box(modifier = GlanceModifier.size(8.dp).background(colorProviderFor(ph.colorIndex))) {}
                         Spacer(GlanceModifier.width(6.dp))
-                        Text("%02d:%02d-%02d:%02d %s %s".format(p.startMin/60,p.startMin%60,p.endMin/60,p.endMin%60, p.courseName, p.classroom ?: ""), style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Black, night = androidx.compose.ui.graphics.Color.White)))
+                        Text("%02d:%02d-%02d:%02d %s %s".format(ph.startMin/60,ph.startMin%60,ph.endMin/60,ph.endMin%60, ph.courseName, ph.classroom ?: ""), style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Black)))
                     }
                 }
             }
             Spacer(GlanceModifier.height(6.dp))
-            Text("明日", style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Black, night = androidx.compose.ui.graphics.Color.White)))
+            Text("明日", style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Black)))
             if (tomorrowPhases.isEmpty()) {
-                Text("明日无课", style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Gray, night = androidx.compose.ui.graphics.Color.LightGray)))
+                Text("明日无课", style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Gray)))
             } else {
-                tomorrowPhases.take(6).forEach { p ->
+                tomorrowPhases.take(6).forEach { ph ->
                     Row(modifier = GlanceModifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                        Box(modifier = GlanceModifier.size(8.dp).background(colorProviderFor(p.colorIndex))) {}
+                        Box(modifier = GlanceModifier.size(8.dp).background(colorProviderFor(ph.colorIndex))) {}
                         Spacer(GlanceModifier.width(6.dp))
-                        Text("%02d:%02d-%02d:%02d %s %s".format(p.startMin/60,p.startMin%60,p.endMin/60,p.endMin%60, p.courseName, p.classroom ?: ""), style = TextStyle(color = ColorProvider(day = androidx.compose.ui.graphics.Color.Black, night = androidx.compose.ui.graphics.Color.White)))
+                        Text("%02d:%02d-%02d:%02d %s %s".format(ph.startMin/60,ph.startMin%60,ph.endMin/60,ph.endMin%60, ph.courseName, ph.classroom ?: ""), style = TextStyle(color = ColorProvider(androidx.compose.ui.graphics.Color.Black)))
                     }
                 }
             }
@@ -133,17 +117,10 @@ class TimetableWidget : GlanceAppWidget() {
             androidx.compose.ui.graphics.Color(0xFFBA68C8), androidx.compose.ui.graphics.Color(0xFFFFB74D)
         )
         val c = palette[index.mod(palette.size)]
-        return ColorProvider(day = c, night = c)
+        return ColorProvider(c)
     }
 }
 
 class TimetableWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = TimetableWidget()
-}
-
-// helper
-private suspend fun <T> kotlinx.coroutines.flow.Flow<T>.firstOrNull(): T? {
-    var result: T? = null
-    collect { result = it; throw kotlinx.coroutines.CancellationException() }
-    return result
 }

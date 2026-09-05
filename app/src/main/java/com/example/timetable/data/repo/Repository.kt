@@ -6,7 +6,7 @@ import com.example.timetable.data.db.SemesterEntity
 import com.example.timetable.data.prefs.Prefs
 import kotlinx.coroutines.flow.Flow
 
-class TimetableRepository(val db: AppDatabase, private val prefs: Prefs) {
+class TimetableRepository(val db: AppDatabase, val prefs: Prefs) {
     fun flowSemesters() = db.semesterDao().flowAll()
     fun flowCurrentSemester() = db.semesterDao().flowCurrent()
     fun flowPhases(semesterId: Long) = db.phaseDao().flowBySemester(semesterId)
