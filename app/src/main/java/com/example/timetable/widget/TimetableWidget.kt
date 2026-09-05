@@ -21,6 +21,7 @@ import androidx.glance.layout.width
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import androidx.compose.ui.unit.dp
 import com.example.timetable.TimetableApp
 import com.example.timetable.util.RepeatExpander
 import com.example.timetable.util.WeekCalculator
